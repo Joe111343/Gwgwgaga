@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<title>多人骨架 P2P + 碰撞阻擋</title>
+<title>多人骨架 P2P + 碰撞阻擋（健壯型攝影機）</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
@@ -26,6 +26,27 @@ input,button{margin:4px;}
 
 <script>
 (async()=>{
+
+// ===== 健壯型攝影機取得函式 =====
+async function getCameraStream(options={}) {
+  const { audio=true, preferredRes={width:720,height:540}, timeoutMs=8000 } = options;
+  const tries=[
+    { video:{width:preferredRes.width,height:preferredRes.height}, audio },
+    { video:{width:640,height:480}, audio },
+    { video:{width:320,height:240}, audio },
+    { video:true, audio }
+  ];
+  const getWithTimeout=(constraints,ms)=>Promise.race([
+    navigator.mediaDevices.getUserMedia(constraints),
+    new Promise((_,reject)=>setTimeout(()=>reject(new Error('getUserMedia timeout')),ms))
+  ]);
+  for(let i=0;i<tries.length;i++){
+    try{return await getWithTimeout(tries[i],timeoutMs);}catch(e){if(['NotAllowedError','SecurityError','PermissionDeniedError'].includes(e.name)) throw e;}
+  }
+  throw new Error('無法啟動攝影機，請確認網站有相機權限且未被其他程式佔用');
+}
+
+// ===== DOM 元件 =====
 const video=document.getElementById('video');
 const canvas=document.getElementById('canvas');
 const ctx=canvas.getContext('2d');
@@ -33,85 +54,51 @@ const myIdSpan=document.getElementById('myId');
 const connectBtn=document.getElementById('connectBtn');
 const peerInput=document.getElementById('peerId');
 
-// 攝影機 + 麥克風
-const stream=await navigator.mediaDevices.getUserMedia({video:{width:720,height:540}, audio:true});
+// ===== 初始化攝影機 =====
+let stream;
+try{
+  stream=await getCameraStream({audio:true,preferredRes:{width:720,height:540},timeoutMs:8000});
+} catch(err){
+  console.error('取得攝影機失敗',err);
+  alert('無法啟動攝影機：'+err.message);
+  return;
+}
 video.srcObject=stream;
 await new Promise(r=>video.onloadedmetadata=r);
 video.play();
 canvas.width=video.videoWidth;
 canvas.height=video.videoHeight;
 
-// MoveNet MULTIPOSE
-const detector=await poseDetection.createDetector(
-  poseDetection.SupportedModels.MoveNet,
-  {modelType:poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING}
-);
+// ===== MoveNet MULTIPOSE =====
+await tf.setBackend('webgl'); await tf.ready();
+const detector=await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet,{modelType:poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING});
 
 // 17關節骨架連線
 const SKELETON=[[0,1],[0,2],[1,3],[2,4],[0,5],[0,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,13],[13,15],[12,14],[14,16],[11,12]];
 const COLORS=['#06d6a0','#118ab2','#ef476f','#ffd166','#a78bfa','#ffa8a8','#8ecae6','#fb8500'];
 
 // ===== 碰撞函數 =====
-function getSegments(person){
-  return SKELETON.map(([a,b])=>{
-    const p1=person[a],p2=person[b];
-    if(!p1||!p2) return null;
-    return {x1:p1.x,y1:p1.y,x2:p2.x,y2:p2.y,r:10};
-  }).filter(Boolean);
-}
-function getCircles(person){
-  return person.map(k=>({x:k.x,y:k.y,r:10})); // r可調整
-}
-function distanceToSegment(px, py, x1, y1, x2, y2){
-  const l2=(x2-x1)*(x2-x1)+(y2-y1)*(y2-y1);
-  if(l2===0) return Math.hypot(px-x1,py-y1);
-  let t=((px-x1)*(x2-x1)+(py-y1)*(y2-y1))/l2;
-  t=Math.max(0,Math.min(1,t));
-  return Math.hypot(px-(x1+t*(x2-x1)),py-(y1+t*(y2-y1)));
-}
-function segmentCollision(seg,circle){
-  return distanceToSegment(circle.x,circle.y,seg.x1,seg.y1,seg.x2,seg.y2)<seg.r+circle.r;
-}
-function circleCollision(c1,c2){
-  const dx=c1.x-c2.x, dy=c1.y-c2.y;
-  return Math.hypot(dx,dy)<c1.r+c2.r;
-}
-
-// 判斷移動是否碰撞
-function willCollide(person, dx, dy, remotePersons){
-  const future = person.map(k=>({x:k.x+dx, y:k.y+dy, score:k.score}));
-  for(const remote of remotePersons){
-    const remoteSegs = getSegments(remote);
-    const remoteCircles = getCircles(remote);
-    for(const k of future){
-      if(k.score<0.35) continue;
-      if(remoteCircles.some(rc=>circleCollision(k,rc))) return true;
-      if(remoteSegs.some(s=>segmentCollision(s,k))) return true;
-    }
-  }
-  return false;
-}
+function getSegments(person){return SKELETON.map(([a,b])=>{const p1=person[a],p2=person[b];if(!p1||!p2) return null; return {x1:p1.x,y1:p1.y,x2:p2.x,y2:p2.y,r:10};}).filter(Boolean);}
+function getCircles(person){return person.map(k=>({x:k.x,y:k.y,r:10}));}
+function distanceToSegment(px,py,x1,y1,x2,y2){const l2=(x2-x1)*(x2-x1)+(y2-y1)*(y2-y1);if(l2===0) return Math.hypot(px-x1,py-y1); let t=((px-x1)*(x2-x1)+(py-y1)*(y2-y1))/l2; t=Math.max(0,Math.min(1,t)); return Math.hypot(px-(x1+t*(x2-x1)),py-(y1+t*(y2-y1)));}
+function segmentCollision(seg,circle){return distanceToSegment(circle.x,circle.y,seg.x1,seg.y1,seg.x2,seg.y2)<seg.r+circle.r;}
+function circleCollision(c1,c2){const dx=c1.x-c2.x,dy=c1.y-c2.y; return Math.hypot(dx,dy)<c1.r+c2.r;}
+function willCollide(person,dx,dy,remotePersons){const future=person.map(k=>({x:k.x+dx,y:k.y+dy,score:k.score})); for(const remote of remotePersons){const remoteSegs=getSegments(remote);const remoteCircles=getCircles(remote);for(const k of future){if(k.score<0.35) continue; if(remoteCircles.some(rc=>circleCollision(k,rc))) return true; if(remoteSegs.some(s=>segmentCollision(s,k))) return true;}} return false;}
 
 // ===== 畫骨架 =====
 function drawPersons(persons){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   for(let i=0;i<persons.length;i++){
-    let collided=persons[i].some(k=>k.collided); // 標記碰撞改顏色
+    let collided=persons[i].some(k=>k.collided);
     ctx.strokeStyle=collided?'red':COLORS[i%COLORS.length];
     ctx.lineWidth=3;
     for(const [a,b] of SKELETON){
-      const p1=persons[i][a],p2=persons[i][b];
-      if(!p1||!p2) continue;
-      ctx.beginPath();
-      ctx.moveTo(p1.x,p1.y);
-      ctx.lineTo(p2.x,p2.y);
-      ctx.stroke();
+      const p1=persons[i][a],p2=persons[i][b]; if(!p1||!p2) continue;
+      ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke();
     }
     for(const k of persons[i]){
-      ctx.beginPath();
-      ctx.arc(k.x,k.y,5,0,Math.PI*2);
-      ctx.fillStyle=collided?'red':COLORS[i%COLORS.length];
-      ctx.fill();
+      ctx.beginPath(); ctx.arc(k.x,k.y,5,0,Math.PI*2);
+      ctx.fillStyle=collided?'red':COLORS[i%COLORS.length]; ctx.fill();
     }
   }
 }
@@ -121,61 +108,32 @@ function shortId(){return Math.floor(Math.random()*9000)+1000+'';}
 const myPeerId=shortId();
 const peer=new Peer(myPeerId);
 let connections=[];
-
-peer.on('open',id=>{ myIdSpan.textContent=id; });
-peer.on('error',err=>{console.error(err); myIdSpan.textContent='初始化失敗'; });
-
-peer.on('connection',c=>{
-  connections.push(c);
-  c.on('data',data=>remotePersons=data);
-  c.on('close',()=>connections.splice(connections.indexOf(c),1));
-});
-
-peer.on('call',call=>{
-  call.answer(stream);
-  call.on('stream',remoteStream=>{
-    const audio=document.createElement('audio');
-    audio.srcObject=remoteStream; audio.autoplay=true; audio.play();
-  });
-});
-
+peer.on('open',id=>{myIdSpan.textContent=id;});
+peer.on('connection',c=>{connections.push(c); c.on('data',data=>remotePersons=data); c.on('close',()=>connections.splice(connections.indexOf(c),1));});
+peer.on('call',call=>{call.answer(stream); call.on('stream',remoteStream=>{const audio=document.createElement('audio'); audio.srcObject=remoteStream; audio.autoplay=true; audio.play();});});
 connectBtn.onclick=()=>{
-  const target=peerInput.value.trim();
-  if(!target) return alert('請輸入對方ID');
-  const c=peer.connect(target);
-  connections.push(c);
-  c.on('open',()=>{
-    const call=peer.call(target,stream);
-    call.on('stream',remoteStream=>{
-      const audio=document.createElement('audio');
-      audio.srcObject=remoteStream; audio.autoplay=true; audio.play();
-    });
-  });
-  c.on('data',data=>remotePersons=data);
-  c.on('close',()=>connections.splice(connections.indexOf(c),1));
+  const target=peerInput.value.trim(); if(!target) return alert('請輸入對方ID');
+  const c=peer.connect(target); connections.push(c);
+  c.on('open',()=>{const call=peer.call(target,stream); call.on('stream',remoteStream=>{const audio=document.createElement('audio'); audio.srcObject=remoteStream; audio.autoplay=true; audio.play();});});
+  c.on('data',data=>remotePersons=data); c.on('close',()=>connections.splice(connections.indexOf(c),1));
 };
 
 // ===== 主迴圈 =====
-let remotePersons=[];
-let localPerson=[];
-
+let remotePersons=[]; let localPerson=[];
 async function loop(){
   const poses=await detector.estimatePoses(video);
   localPerson=poses.length?poses[0].keypoints.map(k=>({x:k.x,y:k.y,score:k.score,collided:false})):[];
 
-  // 範例移動 (可用鍵盤控制替換)
+  // 範例移動 (可換鍵盤控制)
   let dx=0,dy=0;
   if(!willCollide(localPerson,dx,dy,remotePersons)) localPerson.forEach(k=>{k.x+=dx;k.y+=dy;});
 
-  // 檢查碰撞
-  localPerson.forEach(k=>{
-    k.collided = willCollide([k],0,0,remotePersons);
-  });
+  // 碰撞標記
+  localPerson.forEach(k=>{k.collided = willCollide([k],0,0,remotePersons);});
 
-  // 畫骨架
   drawPersons([localPerson,...remotePersons]);
 
-  // 發送給遠端
+  // 發送遠端
   connections.forEach(c=>{if(c.open) try{c.send([localPerson]);}catch(e){};});
   requestAnimationFrame(loop);
 }
