@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<title>多人骨架 P2P + 攝像頭 + 麥克風</title>
+<title>手機/平板 P2P 骨架 + 聲音</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
@@ -78,7 +78,7 @@ connectBtn.onclick=()=>{
   c.on('close',()=>connections.splice(connections.indexOf(c),1));
 };
 
-// ==== 開始攝像頭 (使用者觸發) ====
+// ==== 開始攝像頭 ====
 startBtn.onclick=async()=>{
   try{
     stream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480},audio:true});
@@ -98,7 +98,7 @@ async function initPose(){
 }
 
 // ==== 骨架設定 ====
-const SKELETON=[[0,1],[0,2],[1,3],[2,4],[0,5],[0,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,13],[13,15],[12,14],[14,16],[11,12]];
+const SKELETON=[[0,1],[0,2],[1,3],[2,4],[0,5],[0,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,13],[13,15],[12,14],[14,16]];
 const COLORS=['#06d6a0','#118ab2','#ef476f','#ffd166','#a78bfa','#ffa8a8','#8ecae6','#fb8500'];
 let localPerson=[];
 
