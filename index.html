@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<title>多人骨架 P2P + 麥克風（data channel 傳骨架）</title>
+<title>多人骨架 P2P + 攝像頭 + 麥克風</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
@@ -10,9 +10,10 @@
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.4.7/dist/peerjs.min.js"></script>
 <style>
 body{margin:0;background:#111;color:#fff;font-family:sans-serif;}
-#canvas{width:100vw;height:100vh;display:block;background:#111;position:absolute;top:0;left:0;z-index:1;}
+#canvas{width:100vw;height:100vh;display:block;background:#111;}
 #controls{position:fixed;top:10px;left:10px;background:rgba(0,0,0,0.6);padding:10px;border-radius:8px;z-index:2;}
 input,button{margin:4px;}
+video{display:none;}
 </style>
 </head>
 <body>
@@ -20,13 +21,13 @@ input,button{margin:4px;}
   <div>你的ID: <span id="myId">...</span></div>
   <input type="text" id="peerId" placeholder="輸入對方ID">
   <button id="connectBtn">連線</button>
+  <button id="startBtn">開始攝像頭</button>
 </div>
 <canvas id="canvas"></canvas>
-<video id="video" autoplay playsinline style="display:none;"></video>
+<video id="video" autoplay playsinline></video>
 
 <script>
 (async()=>{
-// ===== DOM & Canvas =====
 const canvas=document.getElementById('canvas');
 const ctx=canvas.getContext('2d');
 canvas.width=window.innerWidth;
@@ -35,22 +36,12 @@ canvas.height=window.innerHeight;
 const myIdSpan=document.getElementById('myId');
 const peerInput=document.getElementById('peerId');
 const connectBtn=document.getElementById('connectBtn');
+const startBtn=document.getElementById('startBtn');
+const video=document.getElementById('video');
 
-// ===== 初始化攝影機（僅拿音訊） =====
 let stream;
-try{
-  stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-}catch(e){alert('無法取得麥克風'); console.error(e); return;}
 
-// ===== 初始化 MoveNet 偵測器 =====
-await tf.setBackend('webgl'); await tf.ready();
-const detector=await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet,{modelType:poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING});
-
-// ===== 17關節骨架 =====
-const SKELETON=[[0,1],[0,2],[1,3],[2,4],[0,5],[0,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,13],[13,15],[12,14],[14,16],[11,12]];
-const COLORS=['#06d6a0','#118ab2','#ef476f','#ffd166','#a78bfa','#ffa8a8','#8ecae6','#fb8500'];
-
-// ===== P2P 設定 =====
+// ==== P2P 設定 ====
 function shortId(){return Math.floor(Math.random()*9000)+1000+'';}
 const myPeerId=shortId();
 const peer=new Peer(myPeerId);
@@ -60,9 +51,7 @@ let remotePersons=[];
 peer.on('open',id=>{myIdSpan.textContent=id;});
 peer.on('connection',c=>{
   connections.push(c);
-  c.on('data',data=>{
-    try{ remotePersons=JSON.parse(data); }catch(e){console.error('解析遠端資料錯誤',e);}
-  });
+  c.on('data',data=>{try{remotePersons=JSON.parse(data);}catch(e){console.error(e);}});
   c.on('close',()=>connections.splice(connections.indexOf(c),1));
 });
 peer.on('call',call=>{
@@ -73,7 +62,6 @@ peer.on('call',call=>{
   });
 });
 
-// 連線按鈕
 connectBtn.onclick=()=>{
   const target=peerInput.value.trim();
   if(!target) return alert('請輸入對方ID');
@@ -86,13 +74,35 @@ connectBtn.onclick=()=>{
       audio.srcObject=remoteStream; audio.autoplay=true; audio.play();
     });
   });
-  c.on('data',data=>{
-    try{ remotePersons=JSON.parse(data); }catch(e){console.error(e);}
-  });
+  c.on('data',data=>{try{remotePersons=JSON.parse(data);}catch(e){console.error(e);}});
   c.on('close',()=>connections.splice(connections.indexOf(c),1));
 };
 
-// ===== 繪製骨架 =====
+// ==== 開始攝像頭 (使用者觸發) ====
+startBtn.onclick=async()=>{
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480},audio:true});
+    video.srcObject=stream;
+    await video.play();
+    startBtn.disabled=true;
+    initPose();
+  }catch(e){alert('無法啟動攝像頭或麥克風'); console.error(e);}
+};
+
+// ==== MoveNet 偵測器 ====
+let detector;
+async function initPose(){
+  await tf.setBackend('webgl'); await tf.ready();
+  detector=await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet,{modelType:poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING});
+  requestAnimationFrame(loop);
+}
+
+// ==== 骨架設定 ====
+const SKELETON=[[0,1],[0,2],[1,3],[2,4],[0,5],[0,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,13],[13,15],[12,14],[14,16],[11,12]];
+const COLORS=['#06d6a0','#118ab2','#ef476f','#ffd166','#a78bfa','#ffa8a8','#8ecae6','#fb8500'];
+let localPerson=[];
+
+// ==== 繪製函數 ====
 function drawPersons(persons){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   for(let i=0;i<persons.length;i++){
@@ -110,25 +120,22 @@ function drawPersons(persons){
   }
 }
 
-// ===== 主迴圈 =====
-let localPerson=[];
+// ==== 主迴圈 ====
 async function loop(){
-  // 偵測骨架
-  const poses=await detector.estimatePoses(document.getElementById('video'));
-  localPerson=poses.length?poses[0].keypoints.map(k=>({x:k.x*2,y:k.y*2,score:k.score})):Array(17).fill({x:Math.random()*canvas.width,y:Math.random()*canvas.height,score:0.5});
-  
-  // 發送資料給遠端
+  if(detector && video.readyState>=2){
+    const poses=await detector.estimatePoses(video);
+    if(poses.length){
+      const scaleX=canvas.width/video.videoWidth;
+      const scaleY=canvas.height/video.videoHeight;
+      localPerson=poses[0].keypoints.map(k=>({x:k.x*scaleX,y:k.y*scaleY,score:k.score}));
+    }
+  }
+  // 發送給遠端
   const dataStr=JSON.stringify(localPerson);
   connections.forEach(c=>{if(c.open)try{c.send(dataStr);}catch(e){}});
-  
-  // 畫本地 + 遠端
   drawPersons([localPerson,...remotePersons]);
-  
   requestAnimationFrame(loop);
 }
-loop();
-
-})();
 </script>
 </body>
 </html>
