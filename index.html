@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<title>多人 17 關節 + 麥克風 P2P</title>
+<title>多人 17 關節骨架 + 麥克風 P2P</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
@@ -10,9 +10,10 @@
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.4.7/dist/peerjs.min.js"></script>
 <style>
 body{ margin:0; background:#111; color:#fff; font-family:sans-serif; }
-#canvas{ width:100vw; height:100vh; display:block; background:#000; }
-#controls{ position:fixed; top:10px; left:10px; background:rgba(0,0,0,0.6); padding:10px; border-radius:8px; }
-input, button{ margin:4px; }
+#canvas{ width:100vw; height:100vh; display:block; background:#000; position:absolute; top:0; left:0; z-index:1;}
+#video{ display:none; }
+#controls{ position:fixed; top:10px; left:10px; background:rgba(0,0,0,0.6); padding:10px; border-radius:8px; z-index:2;}
+input, button{ margin:4px;}
 </style>
 </head>
 <body>
@@ -22,13 +23,16 @@ input, button{ margin:4px; }
   <button id="connectBtn">連線</button>
 </div>
 <canvas id="canvas"></canvas>
-<video id="video" autoplay playsinline style="display:none;"></video>
+<video id="video" autoplay playsinline></video>
 
 <script>
 (async()=>{
   const video = document.getElementById('video');
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
+  const myIdSpan = document.getElementById('myId');
+  const connectBtn = document.getElementById('connectBtn');
+  const peerInput = document.getElementById('peerId');
 
   // 初始化攝影機 + 麥克風
   const stream = await navigator.mediaDevices.getUserMedia({video:{width:720,height:540}, audio:true});
@@ -44,13 +48,13 @@ input, button{ margin:4px; }
     { modelType: poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING }
   );
 
-  // skeletal settings
-  const KP_NAMES = ['nose','left_eye','right_eye','left_ear','right_ear','left_shoulder','right_shoulder','left_elbow','right_elbow','left_wrist','right_wrist','left_hip','right_hip','left_knee','right_knee','left_ankle','right_ankle'];
+  // 17 關節
   const SKELETON = [[0,5],[0,6],[5,6],[5,7],[7,9],[6,8],[8,10],[11,12],[5,11],[6,12],[11,13],[13,15],[12,14],[14,16],[1,0],[2,0],[1,3],[2,4]];
   const COLORS = ['#06d6a0','#118ab2','#ef476f','#ffd166','#a78bfa','#ffa8a8','#8ecae6','#fb8500'];
 
   function drawPersons(persons){
     ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
     for(let i=0;i<persons.length;i++){
       ctx.strokeStyle=COLORS[i%COLORS.length]; ctx.lineWidth=3;
       for(const [a,b] of SKELETON){
@@ -72,28 +76,33 @@ input, button{ margin:4px; }
     }
   }
 
-  // 產生短ID
+  // 短 ID 產生
   function shortId(){ return Math.floor(Math.random()*9000)+1000+''; }
   const myPeerId = shortId();
 
   // PeerJS 初始化
   const peer = new Peer(myPeerId);
-  const myIdSpan = document.getElementById('myId');
-  const connectBtn = document.getElementById('connectBtn');
-  const peerInput = document.getElementById('peerId');
   let conn=null;
-  myIdSpan.textContent = myPeerId;
+
+  peer.on('open', id=>{
+    console.log('Peer 初始化完成 ID:',id);
+    myIdSpan.textContent=id;
+  });
+  peer.on('error', err=>{
+    console.error('PeerJS 錯誤:', err);
+    myIdSpan.textContent='初始化失敗';
+  });
 
   peer.on('connection', c=>{
-    conn = c;
+    conn=c;
     conn.on('data', data=>{ drawPersons(data); });
   });
 
   peer.on('call', call=>{
-    call.answer(stream); // 回傳自己的音訊/影像
+    call.answer(stream);
     call.on('stream', remoteStream=>{
-      let audio = document.createElement('audio');
-      audio.srcObject = remoteStream;
+      let audio=document.createElement('audio');
+      audio.srcObject=remoteStream;
       audio.autoplay=true; audio.play();
     });
   });
@@ -104,18 +113,17 @@ input, button{ margin:4px; }
     conn = peer.connect(target);
     conn.on('open', ()=>{
       console.log('已連線到',target);
-      // 呼叫對方音訊
-      const call = peer.call(target, stream);
+      const call = peer.call(target,stream);
       call.on('stream', remoteStream=>{
-        let audio = document.createElement('audio');
-        audio.srcObject = remoteStream;
+        let audio=document.createElement('audio');
+        audio.srcObject=remoteStream;
         audio.autoplay=true; audio.play();
       });
     });
     conn.on('data', data=>{ drawPersons(data); });
   };
 
-  // main loop
+  // 主迴圈
   async function loop(){
     const poses = await detector.estimatePoses(video);
     const persons = poses.map(p=>p.keypoints.map(k=>({x:k.x,y:k.y,score:k.score})));
