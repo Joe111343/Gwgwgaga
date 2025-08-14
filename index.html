@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<title>多人骨架 P2P + 碰撞阻擋（健壯型攝影機）</title>
+<title>多人骨架 P2P + 碰撞阻擋（超健壯攝影機）</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
@@ -27,9 +27,9 @@ input,button{margin:4px;}
 <script>
 (async()=>{
 
-// ===== 健壯型攝影機取得函式 =====
-async function getCameraStream(options={}) {
-  const { audio=true, preferredRes={width:720,height:540}, timeoutMs=8000 } = options;
+// ===== 超健壯攝影機取得函式 =====
+async function getCameraStream(options={}){
+  const { audio=true, preferredRes={width:720,height:540}, timeoutMs=12000 } = options;
   const tries=[
     { video:{width:preferredRes.width,height:preferredRes.height}, audio },
     { video:{width:640,height:480}, audio },
@@ -57,7 +57,7 @@ const peerInput=document.getElementById('peerId');
 // ===== 初始化攝影機 =====
 let stream;
 try{
-  stream=await getCameraStream({audio:true,preferredRes:{width:720,height:540},timeoutMs:8000});
+  stream=await getCameraStream({audio:true,preferredRes:{width:720,height:540},timeoutMs:12000});
 } catch(err){
   console.error('取得攝影機失敗',err);
   alert('無法啟動攝影機：'+err.message);
