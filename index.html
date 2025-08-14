@@ -3,17 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>P2P骨架 + 聲音</title>
+<title>P2P骨架 + 碰撞</title>
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.4.7/dist/peerjs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
 <style>
-  body { margin:0; background:#000; font-family: system-ui,sans-serif; color:#fff; overflow:hidden;}
-  #controls { position: fixed; top: 12px; left: 12px; z-index: 10; background:rgba(0,0,0,0.7); padding:10px 12px; border-radius:8px; }
-  #canvas { display:block; }
-  button,input { margin-top:4px; }
+body{margin:0;background:#000;color:#fff;overflow:hidden;font-family:system-ui,sans-serif;}
+#controls{position:fixed;top:12px;left:12px;z-index:10;background:rgba(0,0,0,0.7);padding:10px 12px;border-radius:8px;}
+button,input{margin-top:4px;}
+#canvas{display:block;}
 </style>
 </head>
 <body>
@@ -23,7 +23,6 @@
   <button id="connectBtn">連線</button><br>
   <button id="startBtn">開始攝像頭</button>
 </div>
-
 <canvas id="canvas"></canvas>
 <video id="video" autoplay playsinline style="display:none;"></video>
 
@@ -40,18 +39,62 @@ const peerIdInput=document.getElementById('peerId');
 
 let stream, peer, connections=[], localPose=null, remotePoses={};
 
+// 產生短 ID
 function shortId(){return Math.floor(Math.random()*9000)+1000+'';}
 
+// 計算碰撞
+function getJointColliders(kps,radius=15){return kps?.map(kp=>({x:kp.x,y:kp.y,r:radius}))||[];}
+function circleCollide(c1,c2){return Math.hypot(c1.x-c2.x,c1.y-c2.y)<(c1.r+c2.r);}
+function checkCollision(localKps, remoteKps){
+  const localJ=getJointColliders(localKps);
+  const remoteJ=getJointColliders(remoteKps);
+  for(const lj of localJ) for(const rj of remoteJ){
+    if(circleCollide(lj,rj)) return true;
+  }
+  return false;
+}
+
+// 繪製骨架
+function drawPose(kps,color='#ff0000'){
+  if(!kps) return;
+  const J={head:0,lShoulder:5,rShoulder:6,lElbow:7,rElbow:8,lWrist:9,rWrist:10,lHip:11,rHip:12,lKnee:13,rKnee:14,lAnkle:15,rAnkle:16};
+  const links=[[0,5],[0,6],[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[12,14],[13,15],[14,16]];
+  links.forEach(([i,j])=>{
+    const a=kps[i],b=kps[j];
+    if(a?.score>.4 && b?.score>.4){
+      ctx.strokeStyle=color; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+    }
+  });
+  function drawCircle(kp,r){ctx.beginPath(); ctx.arc(kp.x,kp.y,r,0,Math.PI*2); ctx.fillStyle=color; ctx.fill();}
+  kps.forEach(kp=>{if(kp?.score>.4)drawCircle(kp,5);});
+}
+
+// 渲染循環
+function renderLoop(){
+  ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  // 檢查碰撞
+  for(const pid in remotePoses){
+    if(checkCollision(localPose,remotePoses[pid])){
+      // 停止移動或警告
+      console.log('碰撞發生，阻止移動');
+    }
+  }
+  drawPose(localPose,'#ff0000');
+  for(const pid in remotePoses) drawPose(remotePoses[pid],'#0000ff');
+  requestAnimationFrame(renderLoop);
+}
+
+// 初始化 Pose
 async function initPose(){
   await tf.setBackend('webgl'); await tf.ready();
   const detector = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet,{ modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING });
   
   async function poseLoop(){
-    if(stream) {
+    if(stream){
       const poses = await detector.estimatePoses(document.getElementById('video'));
       if(poses.length) localPose=poses[0].keypoints;
-      // 發送給所有連線
-      const dataStr = JSON.stringify(localPose);
+      const dataStr=JSON.stringify(localPose);
       connections.forEach(c=>c.send(dataStr));
     }
     requestAnimationFrame(poseLoop);
@@ -59,26 +102,7 @@ async function initPose(){
   poseLoop();
 }
 
-function drawPose(kps,color='#ff0000'){
-  if(!kps) return;
-  function link(a,b){if(a?.score>.4&&b?.score>.4){ctx.lineWidth=3; ctx.strokeStyle=color; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();}}
-  const J={head:0,lShoulder:5,rShoulder:6,lElbow:7,rElbow:8,lWrist:9,rWrist:10,lHip:11,rHip:12,lKnee:13,rKnee:14,lAnkle:15,rAnkle:16};
-  const head=kps[J.head], ls=kps[J.lShoulder], rs=kps[J.rShoulder], le=kps[J.lElbow], re=kps[J.rElbow],
-        lw=kps[J.lWrist], rw=kps[J.rWrist], lh=kps[J.lHip], rh=kps[J.rHip],
-        lk=kps[J.lKnee], rk=kps[J.rKnee], la=kps[J.lAnkle], ra=kps[J.rAnkle];
-  link(head,ls); link(head,rs); link(ls,rs); link(ls,le); link(le,lw); link(rs,re); link(re,rw);
-  link(ls,lh); link(rs,rh); link(lh,rh); link(lh,lk); link(rh,rk); link(lk,la); link(rk,ra);
-  function drawCircle(kp,r){ctx.beginPath(); ctx.arc(kp.x,kp.y,r,0,Math.PI*2); ctx.fillStyle=color; ctx.fill();}
-  [head,ls,rs,le,re,lw,rw,lh,rh,lk,rk,la,ra].forEach(kp=>{if(kp?.score>.4)drawCircle(kp,5);});
-}
-
-function renderLoop(){
-  ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,canvas.width,canvas.height); // 背景白色
-  drawPose(localPose,'#ff0000');
-  for(const pid in remotePoses) drawPose(remotePoses[pid],'#0000ff');
-  requestAnimationFrame(renderLoop);
-}
-
+// 按鈕事件
 startBtn.onclick=async()=>{
   try{
     stream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480},audio:true});
@@ -97,7 +121,10 @@ startBtn.onclick=async()=>{
 
     peer.on('call',call=>{
       call.answer(stream);
-      call.on('stream',remoteStream=>{const audio=document.createElement('audio'); audio.srcObject=remoteStream; audio.autoplay=true; audio.play();});
+      call.on('stream',remoteStream=>{
+        const audio=document.createElement('audio');
+        audio.srcObject=remoteStream; audio.autoplay=true; audio.play();
+      });
     });
 
     initPose();
